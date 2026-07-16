@@ -1,0 +1,86 @@
+# ============================================================================
+#  Sauvegarde nocturne de la base Tabax-Construire
+#  À placer dans le dépôt PRIVÉ « tabax-backups », chemin exact :
+#      .github/workflows/backup.yml
+#
+#  Prérequis (Settings → Secrets and variables → Actions) :
+#      SUPABASE_DB_URL     postgresql://postgres:MOT_DE_PASSE@db.xxxxx.supabase.co:5432/postgres
+#      BACKUP_PASSPHRASE   phrase de chiffrement longue — SANS elle, les
+#                          sauvegardes sont indéchiffrables, y compris pour vous
+#
+#  Restauration (depuis un poste avec psql et gpg) :
+#      gpg --batch --passphrase "LA_PASSPHRASE" --decrypt backups/tabax-2026-07-16.sql.gpg \
+#        | psql "postgresql://postgres:MOT_DE_PASSE@db.xxxxx.supabase.co:5432/postgres"
+#
+#  → Tester la restauration UNE FOIS PAR TRIMESTRE. Une sauvegarde jamais
+#    testée n'existe pas.
+# ============================================================================
+
+name: Sauvegarde nocturne
+
+on:
+  schedule:
+    - cron: "0 3 * * *"        # chaque nuit à 03h00 UTC (03h00 à Dakar)
+  workflow_dispatch:            # bouton « Run workflow » pour tester à la main
+
+permissions:
+  contents: write
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer le client PostgreSQL
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y postgresql-client -q
+
+      - name: Exporter la base
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          pg_dump "$DB_URL" \
+            --no-owner --no-privileges \
+            --exclude-schema=auth --exclude-schema=storage \
+            --exclude-schema=realtime --exclude-schema=extensions \
+            --schema=public \
+            > dump.sql
+          # Garde-fou : un dump anormalement petit signale un problème —
+          # mieux vaut une alerte qu'une fausse sauvegarde silencieuse.
+          taille=$(wc -c < dump.sql)
+          echo "Taille du dump : $taille octets"
+          if [ "$taille" -lt 50000 ]; then
+            echo "::error::Dump suspect ($taille octets) — vérifier la connexion et le contenu"
+            exit 1
+          fi
+
+      - name: Chiffrer
+        env:
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          mkdir -p backups
+          gpg --batch --yes --symmetric --cipher-algo AES256 \
+              --passphrase "$PASSPHRASE" \
+              --output "backups/tabax-$(date -u +%F).sql.gpg" dump.sql
+          rm -f dump.sql   # jamais de dump en clair dans le dépôt
+
+      - name: Élaguer (30 jours glissants)
+        run: |
+          set -euo pipefail
+          ls -1t backups/tabax-*.sql.gpg 2>/dev/null | tail -n +31 | xargs -r rm --
+          echo "Sauvegardes conservées : $(ls -1 backups/tabax-*.sql.gpg | wc -l)"
+
+      - name: Pousser dans le dépôt
+        run: |
+          set -euo pipefail
+          git config user.name  "sauvegarde-automatique"
+          git config user.email "actions@github.com"
+          git add backups/
+          git diff --cached --quiet && { echo "Rien de nouveau."; exit 0; }
+          git commit -m "Sauvegarde du $(date -u +%F)"
+          git push
