@@ -60,7 +60,9 @@ jobs:
           # mieux vaut une alerte qu'une fausse sauvegarde silencieuse.
           taille=$(wc -c < dump.sql)
           echo "Taille du dump : $taille octets"
-          if [ "$taille" -lt 50000 ]; then
+          # Seuil bas : une base VIDE (schéma seul) fait ~35 Ko — c'est légitime.
+          # Un vrai échec produit un fichier quasi nul (< 5 Ko).
+          if [ "$taille" -lt 5000 ]; then
             echo "::error::Dump suspect ($taille octets) — vérifier la connexion et le contenu"
             exit 1
           fi
