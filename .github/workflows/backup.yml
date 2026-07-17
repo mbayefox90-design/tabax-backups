@@ -33,10 +33,16 @@ jobs:
       - name: Récupérer le dépôt
         uses: actions/checkout@v4
 
-      - name: Installer le client PostgreSQL
+      - name: Installer le client PostgreSQL 17
+        # Le client fourni par Ubuntu (v16) refuse d'exporter une base plus récente ;
+        # les projets Supabase récents sont en Postgres 17 → on installe le client 17.
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y postgresql-client -q
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -sS -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -q
+          sudo apt-get install -y postgresql-client-17 -q
 
       - name: Exporter la base
         env:
